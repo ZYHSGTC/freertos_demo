@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "list.h": "c"
+    },
+    "C_Cpp.default.compilerPath": "d:\\Keil5\\ARM\\ARMCC\\bin\\armcc.exe"
+}

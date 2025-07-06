@@ -1,0 +1,87 @@
+#include <stdint.h> 
+
+/* ----------------------------------------------------------------------------
+ * dummy_noinit 变量放置在名为 ".bss.noinit" 的内存段中，
+ * __attribute__((section(".bss.noinit")))：请编译器把这个变量放到名为 .bss.noinit 的段（section）(在文件ARMCM3_ac6.sct)中。
+ *
+ * 具体来说：
+ * - section(".bss.noinit") 指定该变量属于名为 ".bss.noinit" 的段。
+ * - 该段通常定义在链接脚本（scatter 文件）中，标记为 UNINIT，
+ *   意味着启动时不会对该段内变量进行初始化（不会被清零，也不会从 Flash 复制初值）。
+ * - 这样变量的值可以在复位或掉电后保留（如果硬件支持），适用于保存状态或调试信息。
+ *
+ * 使用场景示例：
+ * - 保存掉电不丢失的数据（如运行计数器、日志等）
+ * - 调试时保留上次运行数据，辅助分析问题
+ *
+ * 注意事项：
+ * - __attribute__ 是编译器扩展，非标准 C 语法，使用时需确认编译器支持。
+ * - 其作用仅在编译阶段生效，影响代码生成和链接过程。
+ * - 必须保证链接脚本中存在 ".bss.noinit" 段的定义
+ * - 变量必须是全局或静态变量，且有合适的对齐要求
+ * - 使用该属性的变量不会自动初始化，使用时需注意变量初值的正确性
+ * -------------------------------------------------------------------------- 
+ *
+ * 编译链接运行流程说明：
+ *
+ * 1. 编译阶段
+ *    - 使用 __attribute__((section(".bss.noinit"))) 修饰变量时，
+ *      编译器会将该变量放入目标文件的 ".bss.noinit" 段。
+ *    - 这时 ".bss.noinit" 只是一个段名，变量的数据尚未确定存放的地址。
+ *
+ * 2. 链接阶段
+ *    - 链接器读取 scatter 文件（*.sct），该文件本质是链接器脚本，
+ *      用于告诉链接器如何将不同段映射到最终内存地址。
+ *    - 例如 scatter 文件中可能包含：
+ *        RW_NOINIT __RW_BASE UNINIT __RW_SIZE {
+ *          *(.bss.noinit)
+ *        }
+ *      表示收集所有目标文件中的 ".bss.noinit" 段放入 RW_NOINIT 区域。
+ *    - 因为该段是 UNINIT 类型，链接器不会将其内容写入 Flash 镜像，
+ *      该区域只在运行时 RAM 中分配空间。
+ *    - 链接器根据 scatter 文件，分配每个段的起始地址，生成最终的 ELF 和二进制文件。
+ *
+ * 3. 运行时启动阶段
+ *    - 复位后启动代码执行：
+ *      - 初始化 .data 段（从 Flash 拷贝到 RAM）
+ *      - 清零 .bss 段
+ *      - 跳过 UNINIT 段（如 .bss.noinit），保留该段内存原有数据
+ *
+ * 总结：
+ *  阶段          | 作用                                  | 参与元素
+ * -------------- | ----------------------------------- | -------------------------------
+ *  编译          | 把变量放入 ".bss.noinit" 段            | __attribute__((section(".bss.noinit")))
+ *  链接          | 根据 scatter 文件分配内存地址           | scatter 文件、链接器
+ *  运行时启动    | 跳过该段初始化，保留内存数据             | 启动代码（startup）
+ */
+
+__attribute__((section(".bss.noinit"))) uint32_t dummy_noinit;
+
+#include "list.h"
+
+
+List_t List_test;
+ListItem_t List_item1, List_item2, List_item3;
+
+int main(void)
+{
+	dummy_noinit = 0;
+
+	vListInitialise(&List_test);
+	vListInitialiseItem(&List_item1);
+	vListInitialiseItem(&List_item2);
+	vListInitialiseItem(&List_item3);
+
+	List_item1.xItemValue = 1;
+	List_item2.xItemValue = 2;
+	List_item3.xItemValue = 3;
+
+	vListInsert(&List_test, &List_item1);
+	vListInsert(&List_test, &List_item2);
+	vListInsert(&List_test, &List_item3);
+	
+	while(1)
+	{
+	}
+	return 0;
+}
