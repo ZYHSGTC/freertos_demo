@@ -1,7 +1,7 @@
 #ifndef LIST_H
 #define LIST_H
-#include "freertos_config.h"
-#include "portmarco.h"
+#include "FreeRtos.h"
+#include "portmacro.h"
 
 /*
  * @brief 双向链表节点
@@ -48,7 +48,7 @@ typedef struct xLIST
 
 /*
  * @brief 初始化节点的拥有者
- * @param ListItem_t*与Owner类型指针
+ * @param ListItem_t*与Owner(TCB_t)类型指针
  */
 #define listSE_LIST_ITEM_OWNER(pxListItem, pxOwner) \
     ((pxListItem)->pvOwner = (void *)pxOwner)
@@ -56,7 +56,7 @@ typedef struct xLIST
 /*
  * @brief 获取节点的拥有者
  * @param ListItem_t*
- * @return Owner类型指针
+ * @return Owner(TCB_t)类型指针
  */
 #define listGET_LIST_ITEM_OWNER(pxListItem) \
     ((pxListItem)->pvOwner)

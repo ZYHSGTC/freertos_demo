@@ -1,0 +1,38 @@
+#ifndef TASK_H
+#define TASK_H
+
+#include "list.h"
+
+struct tskTaskControlBlock;                       // 详细定义在task.c中，因为里面有敏感信息，不能被随意修改访问
+typedef struct tskTaskControlBlock *TaskHandle_t; // 指向任务控制块的指针，用户会用到
+
+#define taskYIELD() portYIELD()
+
+/* 启动任务调度 */
+void vTaskStartScheduler(void);
+/* 任务切换 */
+void vTaskSwitchContext(void);
+
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
+/**
+ * @brief 创建静态任务
+ *
+ * @param pxTaskCode        任务函数，是一个void(void*)的函数指针+
+ * @param pcName            任务名
+ * @param uxStackDepth      任务栈大小，多少个字（StackType_t/uint32_t）
+ * @param pvParameters      任务函数的参数
+ * @param uxPriority        任务优先级
+ * @param puxStackBuffer    任务栈缓冲区的起始地址，大小为 uxStackDepth * sizeof(StackType_t)
+ * @param pxTaskBuffer      任务控制块缓冲区
+ * @return TaskHandle_t 任务句柄
+ */
+TaskHandle_t xTaskCreateStatic(TaskFunction_t pxTaskCode,
+                               const char *const pcName,
+                               const StackType_t uxStackDepth,
+                               void *const pvParameters,
+                               UBaseType_t uxPriority,
+                               StackType_t *const pxStackBuffer,
+                               StaticTask_t *const pxTaskBuffer);
+#endif
+
+#endif

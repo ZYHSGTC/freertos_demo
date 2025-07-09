@@ -57,28 +57,9 @@
 
 __attribute__((section(".bss.noinit"))) uint32_t dummy_noinit;
 
-#include "list.h"
-
-
-List_t List_test;
-ListItem_t List_item1, List_item2, List_item3;
-
 int main(void)
 {
 	dummy_noinit = 0;
-
-	vListInitialise(&List_test);
-	vListInitialiseItem(&List_item1);
-	vListInitialiseItem(&List_item2);
-	vListInitialiseItem(&List_item3);
-
-	List_item1.xItemValue = 1;
-	List_item2.xItemValue = 2;
-	List_item3.xItemValue = 3;
-
-	vListInsert(&List_test, &List_item1);
-	vListInsert(&List_test, &List_item2);
-	vListInsert(&List_test, &List_item3);
 	
 	while(1)
 	{

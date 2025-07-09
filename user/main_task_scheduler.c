@@ -1,0 +1,125 @@
+#include <stdint.h>
+
+/* ----------------------------------------------------------------------------
+ * dummy_noinit 变量放置在名为 ".bss.noinit" 的内存段中，
+ * __attribute__((section(".bss.noinit")))：请编译器把这个变量放到名为 .bss.noinit 的段（section）(在文件ARMCM3_ac6.sct)中。
+ *
+ * 具体来说：
+ * - section(".bss.noinit") 指定该变量属于名为 ".bss.noinit" 的段。
+ * - 该段通常定义在链接脚本（scatter 文件）中，标记为 UNINIT，
+ *   意味着启动时不会对该段内变量进行初始化（不会被清零，也不会从 Flash 复制初值）。
+ * - 这样变量的值可以在复位或掉电后保留（如果硬件支持），适用于保存状态或调试信息。
+ *
+ * 使用场景示例：
+ * - 保存掉电不丢失的数据（如运行计数器、日志等）
+ * - 调试时保留上次运行数据，辅助分析问题
+ *
+ * 注意事项：
+ * - __attribute__ 是编译器扩展，非标准 C 语法，使用时需确认编译器支持。
+ * - 其作用仅在编译阶段生效，影响代码生成和链接过程。
+ * - 必须保证链接脚本中存在 ".bss.noinit" 段的定义
+ * - 变量必须是全局或静态变量，且有合适的对齐要求
+ * - 使用该属性的变量不会自动初始化，使用时需注意变量初值的正确性
+ * --------------------------------------------------------------------------
+ *
+ * 编译链接运行流程说明：
+ *
+ * 1. 编译阶段
+ *    - 使用 __attribute__((section(".bss.noinit"))) 修饰变量时，
+ *      编译器会将该变量放入目标文件的 ".bss.noinit" 段。
+ *    - 这时 ".bss.noinit" 只是一个段名，变量的数据尚未确定存放的地址。
+ *
+ * 2. 链接阶段
+ *    - 链接器读取 scatter 文件（*.sct），该文件本质是链接器脚本，
+ *      用于告诉链接器如何将不同段映射到最终内存地址。
+ *    - 例如 scatter 文件中可能包含：
+ *        RW_NOINIT __RW_BASE UNINIT __RW_SIZE {
+ *          *(.bss.noinit)
+ *        }
+ *      表示收集所有目标文件中的 ".bss.noinit" 段放入 RW_NOINIT 区域。
+ *    - 因为该段是 UNINIT 类型，链接器不会将其内容写入 Flash 镜像，
+ *      该区域只在运行时 RAM 中分配空间。
+ *    - 链接器根据 scatter 文件，分配每个段的起始地址，生成最终的 ELF 和二进制文件。
+ *
+ * 3. 运行时启动阶段
+ *    - 复位后启动代码执行：
+ *      - 初始化 .data 段（从 Flash 拷贝到 RAM）
+ *      - 清零 .bss 段
+ *      - 跳过 UNINIT 段（如 .bss.noinit），保留该段内存原有数据
+ *
+ * 总结：
+ *  阶段          | 作用                                  | 参与元素
+ * -------------- | ----------------------------------- | -------------------------------
+ *  编译          | 把变量放入 ".bss.noinit" 段            | __attribute__((section(".bss.noinit")))
+ *  链接          | 根据 scatter 文件分配内存地址           | scatter 文件、链接器
+ *  运行时启动    | 跳过该段初始化，保留内存数据             | 启动代码（startup）
+ */
+
+__attribute__((section(".bss.noinit"))) uint32_t dummy_noinit;
+
+#include "list.h"
+#include "task.h"
+volatile TickType_t flag1;
+volatile TickType_t flag2;
+
+void delay(TickType_t ticks)
+{
+	for (; ticks != 0; ticks--)
+		;
+}
+
+void task1_entry(void *p_arg)
+{
+	for (;;)
+	{
+		flag1 = 1;
+		delay(1000);
+		flag1 = 0;
+		delay(1000);
+		taskYIELD();
+	}
+}
+
+void task2_entry(void *p_arg)
+{
+	for (;;)
+	{
+		flag2 = 1;
+		delay(1000);
+		flag2 = 0;
+		delay(1000);
+		taskYIELD();
+	}
+}
+
+StaticTask_t Task1TCB;
+TaskHandle_t task1_handle;
+#define TASK1_STACK_SIZE 128
+StackType_t Task1Stack[TASK1_STACK_SIZE];
+StaticTask_t Task2TCB;
+TaskHandle_t task2_handle;
+#define TASK2_STACK_SIZE 128
+StackType_t Task2Stack[TASK2_STACK_SIZE];
+
+int main(void)
+{
+	dummy_noinit = 0;
+	task1_handle = xTaskCreateStatic((TaskFunction_t)task1_entry,
+									 "task1",
+									 TASK1_STACK_SIZE,
+									 NULL,
+									 1,
+									 Task1Stack,
+									 &Task1TCB);
+	task2_handle = xTaskCreateStatic((TaskFunction_t)task2_entry,
+									 "task2",
+									 TASK2_STACK_SIZE,
+									 NULL,
+									 2,
+									 Task2Stack,
+									 &Task2TCB);
+	vTaskStartScheduler();
+	while (1)
+	{
+	}
+}

@@ -26,7 +26,7 @@ void vListInitialise(List_t * const pxList)
     pxList->xListEnd.pxPrevious = & (pxList->xListEnd);    
     // 只是指针赋值，后面可以强制转化，变成对应类型的数据，如MiniListItem_t ListItem_t，
     // MiniListItem_t指针赋值ListItem_t指针时，ListItem_t给只有在访问共享前缀变量时才是安全的
-};
+}
 
 /* 
 * @brief 插入节点
@@ -46,7 +46,7 @@ void vListInsertEnd(List_t * const pxList, ListItem_t * const pxNewListItem)
     pxIndex->pxPrevious = pxNewListItem;
 
     (pxList->uxNumberOfItems)++;
-};
+}
 
 /* 
 * @brief 插入节点
@@ -79,7 +79,7 @@ void vListInsert(List_t * const pxList, ListItem_t * const pxNewListItem)
     pxNewListItem->pvContainer = (void *) pxList;
 
     (pxList->uxNumberOfItems)++;
-};
+}
 
 /* 
 * @brief 删除节点
@@ -104,5 +104,5 @@ UBaseType_t uxListRemove(ListItem_t * const pxItemToRemove)
     (pxList->uxNumberOfItems)--;                // 列表项数量减一
 
     return pxList->uxNumberOfItems;             // 返回列表项数量
-};
+}
 
