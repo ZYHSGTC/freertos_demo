@@ -1,47 +1,58 @@
 /*跟具体芯片有关的函数*/
 #include "FreeRtos.h"
+#include "task.h"
 
-/* Cormex-M3 的 SCB_SHPR2/3 寄存器，分别用于设置系统异常中断（SVC,SYSTICK,PendSV）优先级。NVIC_IPRx用于设置外设中断优先级。两种中断可以互相打断。
- *port：表示这是与硬件端口（Port）相关的定义，FreeRTOS 里常用于和具体 CPU 架构有关的代码。
- *NVIC：Nested Vectored Interrupt Controller（嵌套向量中断控制器），Cortex-M 的核心模块，管理中断优先级和响应。
- *SHPR3：System Handler Priority Register 3，系统处理器中断的优先级寄存器（编号 3）
- *REG：表示这是一个寄存器定义（#define 出来的地址）
+/** GCC 内联汇编基本结构
+ *      __asm volatile (
+ *         "assembly code here"
+ *         : output operands        // 输出参数
+ *         : input operands         // 输入参数
+ *         : clobbered registers    // 被修改的寄存器
+ *      );
+ *  参数约束与修饰符
+ *      约束	含义	                                    示例
+ *      "r"	    使用任意通用寄存器              	        寄存器操作数
+ *      "i"	    立即数（常量）	                            如 #0x20
+ *      "m"	    内存地址	                                变量地址
+ *      "l"	    低寄存器（r0~r7）	                        用于某些指令只支持低寄存器
+ *      "I"	    适用于 MOV 指令的合法立即数范围（0~255）	特定用途
+ * 
+ *      修饰符	含义	                                    示例
+ *      "=" 	该变量（不是只）只写（write-only）	        "=r" (x)
+ *      "+" 	读写（read-write）	                        "+r" (x)
+ *      "&" 	早期绑定（early clobber），表示这个输出不能和任何输入共享寄存器	"=&r" (x)
+ *      "%" 	提示优化器，两个操作数可以交换顺序	        "%0, %1"
+ * 
+ *  例子
+ *  1. "=r" (ulOriginalBASEPRI)：
+ *      告诉 GCC，“我需要一个寄存器来保存输出结果”，并将该寄存器的值写回变量 ulOriginalBASEPRI。
+ *      汇编执行完毕后，GCC 会自动将寄存器 %0 的值写入 ulOriginalBASEPRI 变量中。
+ *  2. : clobbered registers  
+ *       : "r0"：告诉编译器：“我在汇编里用了 r0 寄存器，可能改了它的值”；
+ *               这样编译器就不会把其他变量放在 r0 上，也不会假设 r0 的值没变；
+ *       : "memory"：“我写了任意内存地址”，所以不能重排前后内存访问；类似于插入一个编译器级别的内存屏障；
+ *          a = 1;
+ *          (1) __asm volatile("" ::: "memory");
+ *          (2) __asm volatile("dsb" ::: "memory");
+ *          b = 2;
+ *          (1) 编译器不会把 b = 2 移到 a = 1 前面；保证变量写入顺序；但是 CPU 还是可以乱序执行。
+ *          (2) 此时不仅编译器不会重排，而且 CPU 也会等待 a = 1 写入完成后才执行 b = 2。
  */
-#define portNVIC_SHPR2_REG (*((volatile uint32_t *)0xe000ed1c))
-#define portNVIC_SHPR3_REG (*(volatile uint32_t *)0xe000ed20)
-/*系统异常中断的最低优先级，数值越大优先级越低*/
-#define portMIN_INTERRUPT_PRIORITY (255UL)
-#define portNVIC_SYSTICK_PRI ((uint32_t)(portMIN_INTERRUPT_PRIORITY << 24UL))
-#define portNVIC_PENDSV_PRI ((uint32_t)(portMIN_INTERRUPT_PRIORITY << 16UL))
-
-/* 栈初始化，加括号防止如 #define foo 1 << 2: (foo + 3) 被解读成 1 << (2 + 3) 的问题，实际应该是 (1<<2)+3
-*xPSR（Program Status Register，程序状态寄存器）是 Cortex-M 系列内核中用于表示程序状态的重要寄存器，它是多个寄存器（APSR、IPSR、EPSR）的组合
-| 位数    | 名称                                     | 含义                              |
-| ------- | ---------------------------------------- | --------------------------------- |
-| 31      | N (Negative)                             | 运算结果为负数时置 1              |
-| 30      | Z (Zero)                                 | 运算结果为 0 时置 1               |
-| 29      | C (Carry)                                | 进位/借位标志                     |
-| 28      | V (Overflow)                             | 溢出标志                          |
-| 27      | Q (Saturation)                           | 饱和计算标志（通常用于 DSP 指令） |
-| 26-23   | Reserved                                 | 保留                              |
-| 24（T） | Thumb状态位为1，表示CPU处于Thumb 模式。  | cortex-m之后thumb模式             |
-| 22-10   | IT\[1:7], IT\[0]                         | 条件执行（Thumb IT 状态）         |
-| 9-8     | Reserved                                 | 保留                              |
-| 7-0     | T-bit, Exception number                  |                                   |
-*/
-#define portINITIAL_XPSR (0x01000000)
-
-static void prvTaskExitError(void)
-{
-    for (;;)
-    {
-    }
-}
-
-/**
- * @brief  初始化任务栈
- *
- * @note 在任务的栈上填充任务函数与参数。按照psp弹栈顺序、cpu压栈顺序，填充16个寄存器的值。
+/** thumb指令解析
+ *| 指令  | 全称（英文原文）                    | 中文含义                                  |
+ *| ----- | ----------------------------------- | ----------------------------------------- |
+ *|  msr  | **Move to Special Register**        | 通用寄存器（不能是立即数）写入特殊寄存器  |
+ *|  mrs  | **Move from Special Register**      | 从特殊寄存器读取到通用寄存器              |
+ *|  mov  | **Move Register**                   | 把立即数放到通用寄存器中                  |
+ *|  ldr  | **Load Register**                   | 加载内存到通用寄存器                      |
+ *|  str  | **Store Register**                  | 存储通用寄存器内容到内存                  |
+ *| ldmia | **Load Multiple Increment After**   | 加载多个寄存器内容到内存，加感叹号才递增  |
+ *|  orr  | **Or Register**                     | 按位或                                    |
+ *|  bx   | **Branch Exchange**                 | 跳转到此地址，异常返回，改变指令执行模式  |
+ *| stmdb | **Store Multiple Decrement Before** | 存储多个寄存器内容到内存，加感叹号才递减  |
+ *| ldmia | **Load Multiple Increment After**   | 加载多个寄存器内容到内存，加感叹号才递增  |
+ */
+/** cpu核心寄存器介绍 （任务栈必须要压栈存有）
  *       1.r0-r12 是通用寄存器，可以在两种模式下自由使用；
  *       2.r13（SP）有两个版本：MSP（Main Stack Pointer）和 PSP（Process Stack Pointer）；
  *       3.r14（LR）在异常处理中有特殊用途（EXC_RETURN）；
@@ -56,6 +67,51 @@ static void prvTaskExitError(void)
  *          Thread Mode：
  *              保存pc运行后的返回地址；
  *       4.r15（PC）用于控制程序流；
+ */
+
+// 栈初始化，加括号: 防止如 #define foo 1 << 2: (foo + 3) 被解读成 1 << (2 + 3) 的问题，实际应该是 (1<<2)+3
+/* Cormex-M3 的 SCB_SHPR2/3 寄存器:分别用于设置系统异常中断（SVC,SYSTICK,PendSV）优先级。NVIC_IPRx用于设置外设中断优先级。两种中断可以互相打断。
+ * port：表示这是与硬件端口（Port）相关的定义，FreeRTOS 里常用于和具体 CPU 架构有关的代码。
+ * NVIC：Nested Vectored Interrupt Controller（嵌套向量中断控制器），Cortex-M 的核心模块，管理中断优先级和响应。
+ * SHPR3：System Handler Priority Register 3，系统处理器中断的优先级寄存器（编号 3）
+ * REG：表示这是一个寄存器定义（#define 出来的地址）
+ */
+#define portNVIC_SHPR2_REG (*((volatile uint32_t *)0xe000ed1c))
+#define portNVIC_SHPR3_REG (*(volatile uint32_t *)0xe000ed20)
+/*系统异常中断的最低优先级，数值越大优先级越低*/
+#define portMIN_INTERRUPT_PRIORITY (255UL)
+#define portNVIC_SYSTICK_PRI ((uint32_t)(portMIN_INTERRUPT_PRIORITY << 24UL))
+#define portNVIC_PENDSV_PRI ((uint32_t)(portMIN_INTERRUPT_PRIORITY << 16UL))
+
+/** xPSR（Program Status Register，程序状态寄存器）是 Cortex-M 系列内核中用于表示程序状态的重要寄存器，它是多个寄存器（APSR、IPSR、EPSR）的组合
+ *  | 位数    | 名称                                     | 含义                              |
+ *  | ------- | ---------------------------------------- | --------------------------------- |
+ *  | 31      | N (Negative)                             | 运算结果为负数时置 1              |
+ *  | 30      | Z (Zero)                                 | 运算结果为 0 时置 1               |
+ *  | 29      | C (Carry)                                | 进位/借位标志                     |
+ *  | 28      | V (Overflow)                             | 溢出标志                          |
+ *  | 27      | Q (Saturation)                           | 饱和计算标志（通常用于 DSP 指令） |
+ *  | 26-23   | Reserved                                 | 保留                              |
+ *  | 24（T） | Thumb状态位为1，表示CPU处于Thumb 模式。  | cortex-m之后thumb模式             |
+ *  | 22-10   | IT\[1:7], IT\[0]                         | 条件执行（Thumb IT 状态）         |
+ *  | 9-8     | Reserved                                 | 保留                              |
+ *  | 7-0     | T-bit, Exception number                  |                                   |
+*/
+#define portINITIAL_XPSR (0x01000000)
+
+static void prvTaskExitError(void)
+{
+    for (;;)
+    {
+    }
+}
+
+static UBaseType_t uxCriticalNesting = 0xaaaaaaaa; // 表示临界区嵌套了多少层
+
+/** 初始化任务栈顶指针
+ * @brief  初始化任务栈
+ *
+ * @note 在任务的栈上填充任务函数与参数。按照psp弹栈顺序、cpu压栈顺序，填充16个寄存器的值。
  */
 StackType_t *pxPortInitialiseStack(StackType_t *pxTopOfStack,
                                    TaskFunction_t pxCode,
@@ -82,29 +138,14 @@ StackType_t *pxPortInitialiseStack(StackType_t *pxTopOfStack,
     return pxTopOfStack;
 }
 
-/** thumb指令解析
- *| 指令  | 全称（英文原文）                    | 中文含义                                  |
- *| ----- | ----------------------------------- | ----------------------------------------- |
- *|  msr  | **Move to Special Register**        | 通用寄存器写入特殊寄存器                  |
- *|  mrs  | **Move from Special Register**      | 从特殊寄存器读取到通用寄存器              |
- *|  ldr  | **Load Register**                   | 加载（读取）内存到通用寄存器              |
- *|  str  | **Store Register**                  | 存储通用寄存器内容到内存                  |
- *| ldmia | **Load Multiple Increment After**   | 加载多个寄存器内容到内存，加感叹号才递增  |
- *|  orr  | **Or Register**                     | 按位或                                    |
- *|   bx  | **Branch Exchange**                 | 跳转到此地址，异常返回，改变指令执行模式  |
- *| stmdb | **Store Multiple Decrement Before** | 存储多个寄存器内容到内存，加感叹号才递减  |
- *| ldmia | **Load Multiple Increment After**   | 加载多个寄存器内容到内存，加感叹号才递增  |
- */
-
-/**
+/** SVC 中断处理函数
  * @brief SVC 中断处理函数
- *
- * @note
  */
 void vPortSVCHandler(void)
 {
     // 进入Handler模式
-    __asm volatile(
+    __asm volatile
+    (
         // 软件手动弹栈给cpu r4-r11通用寄存器，并设置psp在栈顶，异常退出后，自动弹栈后面八字进入cpu寄存器
         "ldr r3, pxCurrentTCBConst2             \n" // 获取当前任务控制块指针，pxCurrentTCBConst2 指向 pxCurrentTCB
         "ldr r1, [r3]                           \n" // 获取当前任务控制块
@@ -123,7 +164,7 @@ void vPortSVCHandler(void)
          *        ...
          *        .word 0
          * 2.为什么用 msr basepri, r0
-         * msr 是寄存器到寄存器的指令
+         *  msr 是寄存器到寄存器的指令
          */
 
         /** 退出SVC中断，返回到thread模式，ps指针为PSP；
@@ -150,7 +191,8 @@ void vPortSVCHandler(void)
 static void prvPortStartFirstTask(void)
 {
     // __asm volatile：告诉编译器插入原样汇编代码，不要优化掉；
-    __asm volatile(
+    __asm volatile
+    (
         // 初始化或更新MSP值，返回到上电复位的状态，即为主堆栈栈低
         /**ldr r0, =0xE000ED08 为什么有 =
          *      在 Thumb 模式下，立即数加载受限制（通常 ≤ 8~12 bit）
@@ -227,10 +269,46 @@ BaseType_t xPortStartScheduler(void)
     portNVIC_SHPR3_REG |= portNVIC_SYSTICK_PRI;
     portNVIC_SHPR2_REG = 0;
 
+    uxCriticalNesting = 0;
     prvPortStartFirstTask();
     return pdFALSE;
 }
 
+/** 进入临界区
+ * @brief 进入临界区
+ */
+void vPortEnterCritical(void)
+{
+    portDISABLE_INTERRUPTS();
+    uxCriticalNesting++;
+    if( uxCriticalNesting == 1 )       
+    {
+        // 保证不在中断中使用第一次临界区，不然出错
+        // 原因是如果在中断外进入临界区，basepri将一直为11；临界区也将在回到第一层时退出
+        //       如果在>=11的优先级的中断中进入临界区，那被<11优先级的中断抢占后将无法正常中断返回
+        //       如果在<11的优先级中断中进入临界区，则不会出现问题
+        //       但是11是用户定义的，操作系统只能完全禁止在中断中首次进入临界区
+        configASSERT((portNVIC_INT_CTRL_REG & portVECTACTIVE_MASK) == 0);
+    }
+}
+
+/** 退出临界区，回到临界区第一层的时候才真正执行。但还是得和vPortEnterCritical成对调用
+ * @brief 退出临界区
+ * 
+ * @note 不在第一层临界区不会使能中断，不会真正退出临界区，也就是不会讲basepri置0；
+ */
+void vPortExitCritical(void)
+{
+    // 如果当前临界区嵌套为0，即没有进入临界区，则出现错误
+    configASSERT(uxCriticalNesting);
+    uxCriticalNesting--;
+    if(uxCriticalNesting == 0)
+    {
+        portENABLE_INTERRUPTS();
+    }
+}
+
+/** PendSV 中断处理函数*/
 void xPortPendSVHandler()
 {
     /**
@@ -239,7 +317,8 @@ void xPortPendSVHandler()
      *
      * SCB_ICSR的PENDSTCLR置一后，PendSV异常挂起，其他高优先级中断结束后会执行这个中断
      */
-    __asm volatile(
+    __asm volatile
+    (
         /** 手动压栈保存上下文，r4-r11。压栈完成保存栈顶指针到当前任务的任务块中
          *
          * 进入pendsv中断前硬件会自动根据ps(进入中断前是thread模式，ps = PSP)
@@ -287,9 +366,7 @@ void xPortPendSVHandler()
         // 任务控制块指针
         ".align 4                               \n"
         "pxCurrentTCBConst: .word pxCurrentTCB  \n"
-        ::"i"(configMAX_SYSCALL_INTERRUPT_PRIORITY) // GCC 内联汇编语法
-        /**
-         * i: immediate，只能是 i,configMAX_SYSCALL_INTERRUPT_PRIORITY传到%0
-         */
+        :
+        :"i"(configMAX_SYSCALL_INTERRUPT_PRIORITY) 
         );
 }

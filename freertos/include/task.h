@@ -7,6 +7,24 @@ struct tskTaskControlBlock;                       // 详细定义在task.c中，
 typedef struct tskTaskControlBlock *TaskHandle_t; // 指向任务控制块的指针，用户会用到
 
 #define taskYIELD() portYIELD()
+/** 临界区函数，使用时加上大括号：
+ * ✅ 安全性	避免宏展开带来的语法歧义
+ * ✅ 可读性	明确表示临界区范围
+ * ✅ 维护性	方便后续插入临时变量或调试信息
+ * 
+ * 场景	                            是否需要临界区	原因
+ * 修改就绪队列	                    是	            防止pendsv任务切换中断中和主流程同时修改
+ * 修改 pxCurrentTCB	            是	            关键变量，影响上下文切换
+ * 修改事件队列	                    是	            防止中断与任务并发访问
+ * 调用 vListInsertEnd() 等链表操作	是	            链表操作不是原子的
+ * 修改全局计数器                   是	            多线程/中断访问导致 race condition
+*/
+#define taskDISABLE_INTERRUPTS() portDISABLE_INTERRUPTS()
+#define taskENABLE_INTERRUPTS() portENABLE_INTERRUPTS()
+#define taskENTER_CRITICAL() portENTER_CRITICAL()
+#define taskENTER_CRITICAL_FROM_ISR() portENTER_CRITICAL_FROM_ISR()
+#define taskEXIT_CRITICAL() portEXIT_CRITICAL()
+#define taskEXIT_CRITICAL_FROM_ISR(x) portEXIT_CRITICAL_FROM_ISR(x)
 
 /* 启动任务调度 */
 void vTaskStartScheduler(void);

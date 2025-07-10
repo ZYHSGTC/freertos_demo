@@ -41,16 +41,87 @@ typedef uint32_t TickType_t;
 #define portMAX_DELAY (TickType_t)0xffffffffUL
 #endif
 
+// 触发 PendSV 中断
+// ❌ __asm volatile("dsb");	仅防止 CPU 流水线乱序，但编译器可能仍然优化重排内存访问
+// ✅ __asm volatile("dsb" ::: "memory");	同时防止编译器优化和 CPU 执行乱序，确保内存访问顺序不变
 #define portYIELD()                                     \
     {                                                   \
         portNVIC_INT_CTRL_REG = portNVIC_PENDSVSET_BIT; \
         __asm volatile("dsb" ::: "memory");             \
         __asm volatile("isb");                          \
     }
-    // ❌ __asm volatile("dsb");	仅防止 CPU 流水线乱序，但编译器可能仍然优化重排内存访问
-    // ✅ __asm volatile("dsb" ::: "memory");	同时防止编译器优化和 CPU 执行乱序，确保内存访问顺序不变
-// SCB->ICSR(Interrupt control and state register) 寄存器，28位PENDSVSET写1表示，将PendSV异常状态更改为“待处理(挂起)”
+
+/** SCB->ICSR(Interrupt control and state register) 寄存器，
+ * 28位PENDSVSET写1表示，将PendSV异常状态更改为“待处理(挂起)”
+ * 前8位置VECTACTIVE，有任何非零值时表示当前正在执行的中断服务程序；
+ */
 #define portNVIC_INT_CTRL_REG (*((volatile uint32_t *)0xe000ed04))
 #define portNVIC_PENDSVSET_BIT (1UL << 28UL)
+#define portVECTACTIVE_MASK (0xFFUL)
+
+// port.c 定义
+extern void vPortEnterCritical(void);
+extern void vPortExitCritical(void);
+
+// 临界区宏
+#define portSET_INTERRUPT_MASK_FROM_ISR() ulPortRaiseBASEPRI()
+#define portCLEAR_INTERRUPT_MASK_FROM_ISR(x) vPortSetBASEPRI(x)
+#define portDISABLE_INTERRUPTS() vPortRaiseBASEPRI()
+#define portENABLE_INTERRUPTS() vPortSetBASEPRI(0)
+#define portENTER_CRITICAL_FROM_ISR() portSET_INTERRUPT_MASK_FROM_ISR()
+#define portEXIT_CRITICAL_FROM_ISR(x) portCLEAR_INTERRUPT_MASK_FROM_ISR(x)
+#define portENTER_CRITICAL() vPortEnterCritical()
+#define portEXIT_CRITICAL() vPortExitCritical()
+
+// 强制内联，也就是复制代码到调用处，为什么要加__attribute__
+#ifndef portFORCE_INLINE
+#define portFORCE_INLINE inline __attribute__((always_inline))
+#endif
+
+/** 开启临界区，设置BASEPRI
+ * @note 不能用于中断，如果中断中使用，那中断结束后，basepri不能返回原值变成0
+ *       1.进入临界区后发生中断，如果中断号低于basepri，即优先级更高
+ *          意味着如果代码进入了临界区，同时发生此中断
+ *          这个中断结束后，原临界区就失效了（basepri变了）
+ *       2.如果中断号高于basepri，即优先级较低
+ *          意味着现在中断应该被屏蔽，此时如果有高优先级中断过来，
+ *          那高优先级中断运行完就不会返回低优先级中断，被卡死了
+ */
+portFORCE_INLINE static void vPortRaiseBASEPRI(void)
+{
+    uint32_t ulNewBASEPRI;
+    __asm volatile(
+        "mov %0, %1         \n"
+        "msr basepri, %0    \n"
+        "dsb                \n"
+        "isb                \n"
+        : "=r"(ulNewBASEPRI)
+        : "i"(configMAX_SYSCALL_INTERRUPT_PRIORITY)
+        : "memory");
+}
+
+/** 开启临界区，设置BASEPRI，返回原来的BASEPRI
+ * @return 原来的BASEPRI
+ */
+portFORCE_INLINE static uint32_t ulPortRaiseBASEPRI(void)
+{
+    uint32_t ulOriginalBASEPRI, ulNewBASEPRI;
+    __asm volatile(
+        "mrs %0, basepri                \n"
+        "mov %1, %2                     \n"
+        "msr basepri, %1                \n"
+        "dsb                            \n"
+        "isb                            \n"
+        : "=r"(ulOriginalBASEPRI), "=r"(ulNewBASEPRI)
+        : "i"(configMAX_SYSCALL_INTERRUPT_PRIORITY)
+        : "memory");
+    return ulOriginalBASEPRI;
+}
+
+portFORCE_INLINE static void vPortSetBASEPRI(uint32_t ulNewMaskValue)
+{
+    // 为什么不需要dsb，isb，.word, volatile
+    __asm volatile("msr basepri, %0" ::"r"(ulNewMaskValue) : "memory");
+}
 
 #endif

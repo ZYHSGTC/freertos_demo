@@ -19,7 +19,7 @@ typedef struct tskTaskControlBlock
     UBaseType_t uxPriority;
     StackType_t *pxStack;
     char pcTaskName[configMAX_TASK_NAME_LEN];
-} tskTCB; // 后面不是用tskTCB而是用TCB_t，为了版本兼容
+} tskTCB;             // 后面不是用tskTCB而是用TCB_t，为了版本兼容
 typedef tskTCB TCB_t; // TCB_t 是系统私有不被外部使用的类型
 
 // 这个指针式volatile的，不是其指向的内容是volatile的
@@ -49,16 +49,20 @@ static void prvInitialiseTaskLists(void)
 
 static void prvAddNewTaskToReadyList(TCB_t *pxNewTCB)
 {
-    uxCurrentNumberOfTasks++;
-    if (pxCurrentTCB == NULL)
+    taskENTER_CRITICAL();
     {
-        pxCurrentTCB = pxNewTCB;
-        if (uxCurrentNumberOfTasks == (UBaseType_t)1)
+        uxCurrentNumberOfTasks++;
+        if (pxCurrentTCB == NULL)
         {
-            prvInitialiseTaskLists();
+            pxCurrentTCB = pxNewTCB;
+            if (uxCurrentNumberOfTasks == (UBaseType_t)1)
+            {
+                prvInitialiseTaskLists();
+            }
         }
+        vListInsertEnd(&(pxReadyTasksLists[pxNewTCB->uxPriority]), &(pxNewTCB->xStateListItem));
     }
-    vListInsertEnd(&(pxReadyTasksLists[pxNewTCB->uxPriority]), &(pxNewTCB->xStateListItem));
+    taskEXIT_CRITICAL();
 }
 
 /**
