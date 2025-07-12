@@ -21,6 +21,7 @@ typedef struct xSTATIC_TCB
     UBaseType_t uxDummy5;
     void * pxDummy6;
     uint8_t ucDummy7[ configMAX_TASK_NAME_LEN ];
+    uint32_t uxDummy8;
 } StaticTask_t;
 
 #endif

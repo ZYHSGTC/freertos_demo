@@ -39,18 +39,19 @@
  *          (2) 此时不仅编译器不会重排，而且 CPU 也会等待 a = 1 写入完成后才执行 b = 2。
  */
 /** thumb指令解析
- *| 指令  | 全称（英文原文）                    | 中文含义                                  |
- *| ----- | ----------------------------------- | ----------------------------------------- |
- *|  msr  | **Move to Special Register**        | 通用寄存器（不能是立即数）写入特殊寄存器  |
- *|  mrs  | **Move from Special Register**      | 从特殊寄存器读取到通用寄存器              |
- *|  mov  | **Move Register**                   | 把立即数放到通用寄存器中                  |
- *|  ldr  | **Load Register**                   | 加载内存到通用寄存器                      |
- *|  str  | **Store Register**                  | 存储通用寄存器内容到内存                  |
- *| ldmia | **Load Multiple Increment After**   | 加载多个寄存器内容到内存，加感叹号才递增  |
- *|  orr  | **Or Register**                     | 按位或                                    |
- *|  bx   | **Branch Exchange**                 | 跳转到此地址，异常返回，改变指令执行模式  |
- *| stmdb | **Store Multiple Decrement Before** | 存储多个寄存器内容到内存，加感叹号才递减  |
- *| ldmia | **Load Multiple Increment After**   | 加载多个寄存器内容到内存，加感叹号才递增  |
+ *| 指令  | 全称（英文原文）                                | 中文含义                                  |
+ *| ----- | ----------------------------------------------- | ----------------------------------------- |
+ *|  msr  | **Move to Special Register**                    | 通用寄存器（不能是立即数）写入特殊寄存器  |
+ *|  mrs  | **Move from Special Register**                  | 从特殊寄存器读取到通用寄存器              |
+ *|  mov  | **Move Register**                               | 把立即数放到通用寄存器中                  |
+ *|  ldr  | **Load Register**                               | 加载内存到通用寄存器                      |
+ *|  str  | **Store Register**                              | 存储通用寄存器内容到内存                  |
+ *| ldmia | **Load Multiple Increment After**               | 加载多个寄存器内容到内存，加感叹号才递增  |
+ *|  orr  | **Or Register**                                 | 按位或                                    |
+ *|  bx   | **Branch Exchange**                             | 跳转到此地址，异常返回，改变指令执行模式  |
+ *| stmdb | **Store Multiple Decrement Before**             | 存储多个寄存器内容到内存，加感叹号才递减  |
+ *| ldmia | **Load Multiple Increment After**               | 加载多个寄存器内容到内存，加感叹号才递增  |
+ *| cpsid | **Change Processor State Interrupt Disable**    | 禁止中断                                  |
  */
 /** cpu核心寄存器介绍 （任务栈必须要压栈存有）
  *       1.r0-r12 是通用寄存器，可以在两种模式下自由使用；
@@ -70,7 +71,7 @@
  */
 
 // 栈初始化，加括号: 防止如 #define foo 1 << 2: (foo + 3) 被解读成 1 << (2 + 3) 的问题，实际应该是 (1<<2)+3
-/* Cormex-M3 的 SCB_SHPR2/3 寄存器:分别用于设置系统异常中断（SVC,SYSTICK,PendSV）优先级。NVIC_IPRx用于设置外设中断优先级。两种中断可以互相打断。
+/** SCB_SHPR2/3 寄存器:分别用于设置系统异常中断（SVC,SYSTICK,PendSV）优先级。而NVIC_IPRx寄存器用于设置外设中断优先级。中断与异常可以互相打断。
  * port：表示这是与硬件端口（Port）相关的定义，FreeRTOS 里常用于和具体 CPU 架构有关的代码。
  * NVIC：Nested Vectored Interrupt Controller（嵌套向量中断控制器），Cortex-M 的核心模块，管理中断优先级和响应。
  * SHPR3：System Handler Priority Register 3，系统处理器中断的优先级寄存器（编号 3）
@@ -78,10 +79,25 @@
  */
 #define portNVIC_SHPR2_REG (*((volatile uint32_t *)0xe000ed1c))
 #define portNVIC_SHPR3_REG (*(volatile uint32_t *)0xe000ed20)
-/*系统异常中断的最低优先级，数值越大优先级越低*/
+/** 系统异常中断的最低优先级，数值越大优先级越低*/
 #define portMIN_INTERRUPT_PRIORITY (255UL)
 #define portNVIC_SYSTICK_PRI ((uint32_t)(portMIN_INTERRUPT_PRIORITY << 24UL))
 #define portNVIC_PENDSV_PRI ((uint32_t)(portMIN_INTERRUPT_PRIORITY << 16UL))
+
+/** STK_CTRL 寄存器：系统时钟控制与状态寄存器*/
+#define portNVIC_SYSTICK_CTRL_REG             ( *( ( volatile uint32_t * ) 0xe000e010 ) )
+/** 下面是 STK_CTRL 寄存器的有意义位。系统时钟是否计数为0标志位，有什么用？*/
+#define portNVIC_SYSTICK_COUNT_FLAG_BIT       ( 1UL << 16UL )
+/** 系统时钟的时钟源设置，为1选择Processer clock(AHB)，为0选择AHB/8*/
+#define portNVIC_SYSTICK_CLK_BIT              ( 1UL << 2UL )
+/** 系统时钟异常中断使能*/
+#define portNVIC_SYSTICK_INT_BIT              ( 1UL << 1UL )
+/** 是系统时钟使能，开始计时，计数器从load寄存器加载reload值，并开始倒计时，加载算1 tick？*/
+#define portNVIC_SYSTICK_ENABLE_BIT           ( 1UL << 0UL )
+/** STK_LOAD 寄存器：系统时钟倒计时的数，从这个数减到0，1->0 触发systick中断与COUNTFLAG标志位*/
+#define portNVIC_SYSTICK_LOAD_REG             ( *( ( volatile uint32_t * ) 0xe000e014 ) )
+/** STK_VAL 寄存器：系统时钟当前计数器值，写入任何值都会将该字段清零，并且还会COUNTFLAG位清零*/
+#define portNVIC_SYSTICK_CURRENT_VALUE_REG    ( *( ( volatile uint32_t * ) 0xe000e018 ) )
 
 /** xPSR（Program Status Register，程序状态寄存器）是 Cortex-M 系列内核中用于表示程序状态的重要寄存器，它是多个寄存器（APSR、IPSR、EPSR）的组合
  *  | 位数    | 名称                                     | 含义                              |
@@ -228,6 +244,35 @@ static void prvPortStartFirstTask(void)
     );
 }
 
+void xPortSysTickHandler()
+{
+    portDISABLE_INTERRUPTS();
+    {
+        if(xTaskIncrementTick() != pdFALSE)
+        {
+            // 触发pendsv中断，尝试切换任务
+            portYIELD();
+        }
+    }
+    portENABLE_INTERRUPTS();
+}
+
+/** 初始化系统中断
+ * @brief 初始化系统systick中断
+ * 
+ * @note 为什么是weak
+*/
+__attribute__((weak)) void vPortSetupTimerInterrupt(void)
+{
+    portNVIC_SYSTICK_CTRL_REG = 0UL; // 清空系统时钟控制与状态寄存器
+    portNVIC_SYSTICK_CURRENT_VALUE_REG = 0UL; // 清空当前计数器的值
+    
+    // 我这里默认选这里系统时钟为cpu core时钟，cpu时钟频率为12MHz，要设置systick中断频率为100Hz，也就是10ms触发一次。
+    portNVIC_SYSTICK_LOAD_REG = (configCPU_CLOCK_HZ / configTICK_RATE_HZ) - 1UL;
+    // 设置systick时钟源为cpu core时钟，使能中断，使能systick开始计时
+    portNVIC_SYSTICK_CTRL_REG = portNVIC_SYSTICK_CLK_BIT | portNVIC_SYSTICK_INT_BIT | portNVIC_SYSTICK_ENABLE_BIT;
+}
+
 /** 启动调度器
  * @brief 启动调度器
  *
@@ -269,6 +314,7 @@ BaseType_t xPortStartScheduler(void)
     portNVIC_SHPR3_REG |= portNVIC_SYSTICK_PRI;
     portNVIC_SHPR2_REG = 0;
 
+    vPortSetupTimerInterrupt();
     uxCriticalNesting = 0;
     prvPortStartFirstTask();
     return pdFALSE;

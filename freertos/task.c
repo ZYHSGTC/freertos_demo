@@ -19,6 +19,7 @@ typedef struct tskTaskControlBlock
     UBaseType_t uxPriority;
     StackType_t *pxStack;
     char pcTaskName[configMAX_TASK_NAME_LEN];
+    TickType_t xTicksToDelay;
 } tskTCB;             // 后面不是用tskTCB而是用TCB_t，为了版本兼容
 typedef tskTCB TCB_t; // TCB_t 是系统私有不被外部使用的类型
 
@@ -30,12 +31,66 @@ static List_t pxReadyTasksLists[configMAX_PRIORITIES];
 
 static volatile UBaseType_t uxCurrentNumberOfTasks = (UBaseType_t)0U;
 static volatile BaseType_t xSchedulerRunning = pdFALSE;
+static TaskHandle_t xIdleTaskHandle;
+
+void vTaskDelay(const TickType_t xTicksToDelay)
+{
+    pxCurrentTCB->xTicksToDelay = xTicksToDelay;
+
+    taskYIELD();
+}
+
+static void prvIdleTask(void *pvParameters)
+{
+    (void)pvParameters;
+    for (;;)
+    {
+    }
+}
+
+void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer,
+                                   StackType_t **ppxIdleTaskStackBuffer,
+                                   StackType_t *puxIdleTaskStackSize)
+{ // static 变量在函数运行完也不会消失，是全局变量
+    static StaticTask_t xIdleTaskTCB;
+    static StackType_t uxIdleTaskStack[configMINIMAL_STACK_SIZE];
+
+    *ppxIdleTaskTCBBuffer = &(xIdleTaskTCB);
+    *ppxIdleTaskStackBuffer = &(uxIdleTaskStack[0]);
+    *puxIdleTaskStackSize = configMINIMAL_STACK_SIZE;
+}
+static BaseType_t prvCreateIdleTasks(void)
+{
+    BaseType_t xReturn = pdPASS;
+    StaticTask_t *pxIdleTaskTCBBuffer = NULL;
+    StackType_t *pxIdleTaskStackBuffer = NULL;
+    StackType_t uxIdleTaskStackSize;
+    vApplicationGetIdleTaskMemory(&pxIdleTaskTCBBuffer, &pxIdleTaskStackBuffer, &uxIdleTaskStackSize);
+    xIdleTaskHandle = xTaskCreateStatic((TaskFunction_t)prvIdleTask,
+                                        "IDLE",
+                                        uxIdleTaskStackSize,
+                                        NULL,
+                                        0x00,
+                                        pxIdleTaskStackBuffer,
+                                        pxIdleTaskTCBBuffer);
+    if (xIdleTaskHandle == NULL)
+    {
+        xReturn = pdFAIL;
+    }
+    return xReturn;
+}
 
 /* 启动任务调度 */
 void vTaskStartScheduler(void)
 {
-    xSchedulerRunning = pdTRUE;
-    (void)xPortStartScheduler();
+    BaseType_t xReturn;
+    xReturn = prvCreateIdleTasks();
+    if (xReturn == pdPASS)
+    {
+        portDISABLE_INTERRUPTS();    // 关中断，防止设置完systick后，发生中断，运行中断函数导致错误
+        xSchedulerRunning = pdTRUE;  // 表示开始启动调度器
+        (void)xPortStartScheduler(); // 启动任务调度
+    }
 }
 
 /* 初始化任务列表 */
@@ -49,6 +104,7 @@ static void prvInitialiseTaskLists(void)
 
 static void prvAddNewTaskToReadyList(TCB_t *pxNewTCB)
 {
+    // 确保中断不会在列表更新的时候访问列表，
     taskENTER_CRITICAL();
     {
         uxCurrentNumberOfTasks++;
@@ -62,6 +118,7 @@ static void prvAddNewTaskToReadyList(TCB_t *pxNewTCB)
         }
         vListInsertEnd(&(pxReadyTasksLists[pxNewTCB->uxPriority]), &(pxNewTCB->xStateListItem));
     }
+    // 在调度器未开启前，uxCriticalNesting=0xaaaaaaaa，并不能关中断。basepri将一直保持0xbf,b=11,为进临界区设置。
     taskEXIT_CRITICAL();
 }
 
@@ -135,6 +192,7 @@ static void prvInitialiseNewTask(TaskFunction_t pxTaskCode,
     {
         *pxCreatedTask = (TaskHandle_t)pxNewTCB;
     }
+    
 }
 
 /**
@@ -230,13 +288,69 @@ extern StaticTask_t Task1TCB;
 extern StaticTask_t Task2TCB;
 void vTaskSwitchContext(void)
 {
-    /* 两个任务轮流切换 */
-    if (pxCurrentTCB == (TCB_t *)(&Task1TCB))
+    if (pxCurrentTCB == (TCB_t *)xIdleTaskHandle)
     {
-        pxCurrentTCB = (TCB_t *)(&Task2TCB);
+        if (((TCB_t *)&Task1TCB)->xTicksToDelay == 0)
+        {
+            pxCurrentTCB = (TCB_t *)&Task1TCB;
+        }
+        else if (((TCB_t *)&Task2TCB)->xTicksToDelay == 0)
+        {
+            pxCurrentTCB = (TCB_t *)&Task2TCB;
+        }
+        else
+        {
+            return;
+        }
     }
-    else
+    else if (pxCurrentTCB == (TCB_t *)&Task1TCB)
     {
-        pxCurrentTCB = (TCB_t *)(&Task1TCB);
+        if (((TCB_t *)&Task2TCB)->xTicksToDelay == 0)
+        {
+            pxCurrentTCB = (TCB_t *)&Task2TCB;
+        }
+        else if (pxCurrentTCB->xTicksToDelay != 0)
+        {
+            pxCurrentTCB = (TCB_t *)xIdleTaskHandle;
+        }
+        else
+        {
+            return;
+        }
     }
+    else if (pxCurrentTCB == (TCB_t *)&Task2TCB)
+    {
+        if (((TCB_t *)&Task1TCB)->xTicksToDelay == 0)
+        {
+            pxCurrentTCB = (TCB_t *)&Task1TCB;
+        }
+        else if (pxCurrentTCB->xTicksToDelay != 0)
+        {
+            pxCurrentTCB = (TCB_t *)xIdleTaskHandle;
+        }
+        else
+        {
+            return;
+        }
+    }
+}
+
+TickType_t xTickCount = 0;
+BaseType_t xTaskIncrementTick(void)
+{
+    TCB_t *pxTCB;
+    BaseType_t i = 0;
+    xTickCount++;
+    for (i = 0; i < configMAX_PRIORITIES; i++)
+    {
+        if ((&pxReadyTasksLists[i])->uxNumberOfItems > 0)
+        {
+            pxTCB = (TCB_t *)listGET_OWNER_OF_HEAD_ENTRY(&pxReadyTasksLists[i]);
+            if (pxTCB->xTicksToDelay > 0)
+            {
+                pxTCB->xTicksToDelay--;
+            }
+        }
+    }
+    return pdTRUE;
 }

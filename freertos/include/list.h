@@ -27,8 +27,8 @@ typedef struct xLIST_ITEM
 typedef struct xMINI_LIST_ITEM
 {
     TickType_t xItemValue;
-    struct xMINI_LIST_ITEM *pxNext;
-    struct xMINI_LIST_ITEM *pxPrevious;
+    struct xLIST_ITEM *pxNext;
+    struct xLIST_ITEM *pxPrevious;
 } MiniListItem_t;
 
 /*
@@ -91,6 +91,14 @@ typedef struct xLIST
  */
 #define listGET_HEAD_ENTRY(pxList) \
     (((pxList)->xListEnd).pxNext)
+
+/**
+ *  @brief 获取链表头节点的TCB指针
+ *  @param pxList*
+ *  @return TCB_t*
+ */
+#define listGET_OWNER_OF_HEAD_ENTRY(pxList) \
+    (((&((pxList)->xListEnd))->pxNext)->pvOwner)
 
 /*
  * @brief 获取节点的下一个节点

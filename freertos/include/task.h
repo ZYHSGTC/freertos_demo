@@ -26,10 +26,15 @@ typedef struct tskTaskControlBlock *TaskHandle_t; // 指向任务控制块的指
 #define taskEXIT_CRITICAL() portEXIT_CRITICAL()
 #define taskEXIT_CRITICAL_FROM_ISR(x) portEXIT_CRITICAL_FROM_ISR(x)
 
+/* 阻塞延时 */
+void vTaskDelay(const TickType_t xTicksToDelay);
+
 /* 启动任务调度 */
 void vTaskStartScheduler(void);
 /* 任务切换 */
 void vTaskSwitchContext(void);
+/* 延时计时*/
+BaseType_t xTaskIncrementTick(void);
 
 #if (configSUPPORT_STATIC_ALLOCATION == 1)
 /**
