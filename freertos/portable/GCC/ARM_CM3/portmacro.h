@@ -73,6 +73,18 @@ extern void vPortExitCritical(void);
 #define portENTER_CRITICAL() vPortEnterCritical()
 #define portEXIT_CRITICAL() vPortExitCritical()
 
+__attribute__((always_inline)) static inline uint8_t ucPortCountLeadingZeros(uint32_t ulBitmap)
+{
+    uint8_t ucReturn;
+    __asm volatile("clz %0, %1" : "=r"(ucReturn) : "r"(ulBitmap) : "memory");
+    return ucReturn;
+}
+#define portRECORD_READY_PRIORITY(uxPriority, uxReadyPriorities) \
+    (uxReadyPriorities) |= (1UL << (uxPriority))
+#define portRESET_READY_PRIORITY(uxPriority, uxReadyPriorities) \
+    (uxReadyPriorities) &= ~(1UL << (uxPriority))
+#define portGET_HIGHEST_PRIORITY(uxTopPriority, uxReadyPriorities) \
+    uxTopPriority = (31UL - (uint32_t)ucPortCountLeadingZeros((uxReadyPriorities)))
 // 强制内联，也就是复制代码到调用处，为什么要加__attribute__
 #ifndef portFORCE_INLINE
 #define portFORCE_INLINE inline __attribute__((always_inline))

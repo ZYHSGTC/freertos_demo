@@ -12,9 +12,12 @@
 #define configMAX_PRIORITIES 5                   // 任务队列允许的优先级数量
 #define configMAX_SYSCALL_INTERRUPT_PRIORITY 191 // 临界区时，允许中断优先级数>=11被屏蔽 191=0b10111111，高四位为11
 
+
+#define configUSE_PREEMPTION 1
+#define configUSE_TIME_SLICING 1
 #define configUSE_16_BIT_TICKS 0          // 允许使用32位时间片
 #define configSUPPORT_STATIC_ALLOCATION 1 // 允许使用静态内存分配
-
+#define configUSE_PORT_OPTIMISED_TASK_SELECTION 1 // 允许使用cortex-m3相关寄存器优化的任务选择
 #define xPortPendSVHandler PendSV_Handler // 同中断向量表一样的名字
 #define xPortSysTickHandler SysTick_Handler
 #define vPortSVCHandler SVC_Handler

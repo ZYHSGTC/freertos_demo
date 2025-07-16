@@ -86,7 +86,7 @@ void vListInsert(List_t *const pxList, ListItem_t *const pxNewListItem)
 /*
  * @brief 删除节点
  * @param pxItemToRemove 节点指针
- * @return 删除的节点数量
+ * @return 删除后列表的节点数量
  * @discription 删除节点，并返回删除的节点数量
  */
 UBaseType_t uxListRemove(ListItem_t *const pxItemToRemove)

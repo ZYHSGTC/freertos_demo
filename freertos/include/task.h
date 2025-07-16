@@ -6,6 +6,7 @@
 struct tskTaskControlBlock;                       // 详细定义在task.c中，因为里面有敏感信息，不能被随意修改访问
 typedef struct tskTaskControlBlock *TaskHandle_t; // 指向任务控制块的指针，用户会用到
 
+#define tskIDLE_PRIORITY    (( UBaseType_t)0U)
 #define taskYIELD() portYIELD()
 /** 临界区函数，使用时加上大括号：
  * ✅ 安全性	避免宏展开带来的语法歧义

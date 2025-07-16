@@ -143,7 +143,7 @@ typedef struct xLIST
 #define listGET_OWNER_OF_NEXT_ENTRY(pxTCB, pxList)                                    \
     do                                                                                \
     {                                                                                 \
-        List_t const *pxConstList = (pxList);                                         \
+        List_t* const pxConstList = (pxList);                                         \
         pxConstList->pxIndex = (pxConstList)->pxIndex->pxNext;                        \
         if ((void *)((pxConstList)->pxIndex) == (void *)(&((pxConstList)->xListEnd))) \
         {                                                                             \

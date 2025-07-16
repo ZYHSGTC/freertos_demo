@@ -52,6 +52,7 @@
  *| stmdb | **Store Multiple Decrement Before**             | 存储多个寄存器内容到内存，加感叹号才递减  |
  *| ldmia | **Load Multiple Increment After**               | 加载多个寄存器内容到内存，加感叹号才递增  |
  *| cpsid | **Change Processor State Interrupt Disable**    | 禁止中断                                  |
+ *|  clz  | **Count Leading Zeros**                         | 计算一个二进制数最左边的0的个数           |
  */
 /** cpu核心寄存器介绍 （任务栈必须要压栈存有）
  *       1.r0-r12 是通用寄存器，可以在两种模式下自由使用；
@@ -66,7 +67,12 @@
  *                  0xFFFFFFF9	返回到 Thread Mode，并使用 MSP
  *                  0xFFFFFFFD	返回到 Thread Mode，并使用 PSP
  *          Thread Mode：
- *              保存pc运行后的返回地址；
+ *              当你调用一个函数时(比如 BL func)：        
+ *                  CPU 会自动将“下一条指令地址”保存到 LR 寄存器中
+ *              当函数执行结束时(执行 BX LR):
+ *                  就能跳回到调用者的位置继续执行，也就是说 LR = 返回地址
+ *              如果用户任务不是无限循环的，那他执行完任务：
+ *                  就会跳到任务退出错误函数prvTaskExitError里执行循环
  *       4.r15（PC）用于控制程序流；
  */
 
@@ -124,53 +130,52 @@ static void prvTaskExitError(void)
 
 static UBaseType_t uxCriticalNesting = 0xaaaaaaaa; // 表示临界区嵌套了多少层
 
-/** 初始化任务栈顶指针
- * @brief  初始化任务栈
- *
- * @note 在任务的栈上填充任务函数与参数。按照psp弹栈顺序、cpu压栈顺序，填充16个寄存器的值。
- */
-StackType_t *pxPortInitialiseStack(StackType_t *pxTopOfStack,
-                                   TaskFunction_t pxCode,
-                                   void *pvParameters)
+/* 初始化任务栈顶指针，添加任务函数的基础信息到栈上，以方便上下文转换 */
+StackType_t *pxPortInitialiseStack(StackType_t *pxTopOfStack,   // 函数栈顶指针
+                                   TaskFunction_t pxCode,       // 任务函数指针    
+                                   void *pvParameters)          // 任务函数的参数
 {
     pxTopOfStack--; // 一开始pxTopOfStack时八字节对齐，所以需要减一，在他下方开始压栈；
-    *pxTopOfStack = portINITIAL_XPSR;
-    pxTopOfStack--;
-    *pxTopOfStack = (StackType_t)pxCode; // R15 PC
-    /*
-    LR（Link Register，链接寄存器）
-        当你调用一个函数时（比如 BL func）：
-        CPU 会自动将“下一条指令地址”保存到 LR 寄存器中
-        当函数执行结束时，执行 BX LR，就能跳回到调用者的位置继续执行
-
-        也就是说 LR = 返回地址，如果任务不是无限循环，那他执行完就会跳到任务退出错误函数prvTaskExitError里执行循环
-    */
-    pxTopOfStack--;
-    *pxTopOfStack = (StackType_t)prvTaskExitError; // R14 LR
-    pxTopOfStack -= 5;                             // R1~R3 默认为零
+    *pxTopOfStack = portINITIAL_XPSR;       // 进入thumb模式运行任务
+    pxTopOfStack--;                     
+    *pxTopOfStack = (StackType_t)pxCode;    // R15 PC：任务函数指针，即函数entry入口
+    pxTopOfStack--;     
+    *pxTopOfStack = (StackType_t)prvTaskExitError;  // R14 LR：不是无限循环的任务结束后，调转到这个函数继续运行
+    pxTopOfStack -= 5;                              // R1 ~ R3 默认为零
     *pxTopOfStack = (StackType_t)pvParameters;
-    pxTopOfStack -= 8; // R4~R11 默认为零
-
+    pxTopOfStack -= 8;                              // R4 ~ R11 默认为零
     return pxTopOfStack;
 }
 
-/** SVC 中断处理函数
- * @brief SVC 中断处理函数
- */
+/* systick中断处理函数，用去系统计时与触发任务切换也就是PenSV中断 */
+void xPortSysTickHandler()
+{
+    portDISABLE_INTERRUPTS();
+    {
+        if(xTaskIncrementTick() != pdFALSE)
+        {
+            // 触发pendsv中断，尝试切换任务
+            portYIELD();
+        }
+    }
+    portENABLE_INTERRUPTS();
+}
+
+/* SVC 中断处理函数，用于启动第一个任务 */ 
 void vPortSVCHandler(void)
 {
     // 进入Handler模式
     __asm volatile
     (
         // 软件手动弹栈给cpu r4-r11通用寄存器，并设置psp在栈顶，异常退出后，自动弹栈后面八字进入cpu寄存器
-        "ldr r3, pxCurrentTCBConst2             \n" // 获取当前任务控制块指针，pxCurrentTCBConst2 指向 pxCurrentTCB
-        "ldr r1, [r3]                           \n" // 获取当前任务控制块
+        "ldr r3, pxCurrentTCBConst2             \n" // 获取pxCurrentTCB存放地址pxCurrentTCBConst2：指向 pxCurrentTCB
+        "ldr r1, [r3]                           \n" // 获取pxCurrentTCB
         "ldr r0, [r1]                           \n" // 获取当前任务控制块结构体首成员，栈顶指针
         "ldmia r0!, {r4-r11}                    \n" // 软件手动加载到cpu中的寄存器
         "msr psp, r0                            \n" // 设置psp指向当前任务栈顶，退出handle模式后，自动加载后面八个字到cpu寄存器
         "isb                                    \n" // 保证前面指令完成才能设置屏蔽中断
 
-        // 设置basepri (Base Priority Register) 为零，表示所有优先级的中断都不屏蔽，操作系统启动前可能被设置为某些值需要改回来
+        // 设置basepri (Base Priority Register) 为零，表示所有优先级的中断都不屏蔽，操作系统启动前可能被设置(vTaskStartScheduler中的关中断)为某些值需要改回来
         "mov r0, #0                             \n"
         "msr basepri, r0                        \n"
         /** 1.为什么用 mov
@@ -206,26 +211,27 @@ void vPortSVCHandler(void)
  */
 static void prvPortStartFirstTask(void)
 {
-    // __asm volatile：告诉编译器插入原样汇编代码，不要优化掉；
+    // __asm volatile：告诉编译器插入原样汇编代码，不要对这段汇编代码进行任何优化；
     __asm volatile
     (
         // 初始化或更新MSP值，返回到上电复位的状态，即为主堆栈栈低
-        /**ldr r0, =0xE000ED08 为什么有 =
+        /** 1) ldr r0, =0xE000ED08 为什么有 =
          *      在 Thumb 模式下，立即数加载受限制（通常 ≤ 8~12 bit）
          *      他时告诉汇编器 请将值 0xE000ED08 放到某个内存区域，然后让 ldr r0, [...] 去读取它
+         *  2) 为什么如此更新MSP
+         *      中断向量表格式
+         *      __attribute__ ((section(".isr_vector")))
+         *      const uint32_t *vector_table[] = {
+         *          (uint32_t *)_estack, // 向量表第0项：MSP 初始化值
+         *          Reset_Handler,       // 向量表第1项：复位中断入口地址
+         *          NMI_Handler,
+         *          HardFault_Handler,
+         *          ...
+         *      };
          */
         " ldr r0, =0xE000ED08    \n" // 该地址是 System Control Block (SCB) 中的 VTOR（Vector Table Offset Register）的地址。VTOR 指向中断向量表的基地址。
         " ldr r0, [r0]           \n" // 读取 SCB_VTOR 的值，获取中断向量表的基地址。即vector_table，一般是0x00000000
         " ldr r0, [r0]           \n" // 读取中断向量表第一项，即第一个中断向量地址。指向系统主堆栈。
-        /** 中断向量表格式
-        *   __attribute__ ((section(".isr_vector")))
-        *   const uint32_t *vector_table[] = {
-        *       (uint32_t *)_estack, // 向量表第0项：MSP 初始化值
-        *       Reset_Handler,       // 向量表第1项：复位中断入口地址
-        *       NMI_Handler,
-        *       HardFault_Handler,
-        *       ...
-        };*/
         " msr msp, r0            \n"
 
         // 使能全局中断
@@ -244,30 +250,17 @@ static void prvPortStartFirstTask(void)
     );
 }
 
-void xPortSysTickHandler()
-{
-    portDISABLE_INTERRUPTS();
-    {
-        if(xTaskIncrementTick() != pdFALSE)
-        {
-            // 触发pendsv中断，尝试切换任务
-            portYIELD();
-        }
-    }
-    portENABLE_INTERRUPTS();
-}
-
 /** 初始化系统中断
  * @brief 初始化系统systick中断
  * 
- * @note 为什么是weak
+ * @note weak可以用户自己设置systick中断，如频率，也就是系统呼吸
 */
 __attribute__((weak)) void vPortSetupTimerInterrupt(void)
 {
-    portNVIC_SYSTICK_CTRL_REG = 0UL; // 清空系统时钟控制与状态寄存器
-    portNVIC_SYSTICK_CURRENT_VALUE_REG = 0UL; // 清空当前计数器的值
+    portNVIC_SYSTICK_CTRL_REG = 0UL;            // 清空系统时钟控制与状态寄存器
+    portNVIC_SYSTICK_CURRENT_VALUE_REG = 0UL;   // 清空当前计数器的值
     
-    // 我这里默认选这里系统时钟为cpu core时钟，cpu时钟频率为12MHz，要设置systick中断频率为100Hz，也就是10ms触发一次。
+    // 我这里默认选这里系统时钟为cpu core时钟，cpu时钟频率为12MHz，要设置systick中断频率configTICK_RATE_HZ为100Hz，也就是10ms触发一次。
     portNVIC_SYSTICK_LOAD_REG = (configCPU_CLOCK_HZ / configTICK_RATE_HZ) - 1UL;
     // 设置systick时钟源为cpu core时钟，使能中断，使能systick开始计时
     portNVIC_SYSTICK_CTRL_REG = portNVIC_SYSTICK_CLK_BIT | portNVIC_SYSTICK_INT_BIT | portNVIC_SYSTICK_ENABLE_BIT;
@@ -310,15 +303,15 @@ BaseType_t xPortStartScheduler(void)
         ⚠️ 注意：SVCall 是“软中断”，只有在执行 `svc` 指令时才会触发，
         并不是周期性发生的，不会影响系统实时性。
     */
-    portNVIC_SHPR3_REG |= portNVIC_PENDSV_PRI;
-    portNVIC_SHPR3_REG |= portNVIC_SYSTICK_PRI;
-    portNVIC_SHPR2_REG = 0;
+    portNVIC_SHPR3_REG |= portNVIC_PENDSV_PRI;  // PendSV 任务切换中断优先级设为最低
+    portNVIC_SHPR3_REG |= portNVIC_SYSTICK_PRI; // systick 系统滴答计时中断优先级设为最低
+    portNVIC_SHPR2_REG = 0;                     // SVC 首任务初始化中断优先级设为最高
 
-    vPortSetupTimerInterrupt();
-    uxCriticalNesting = 0;
-    prvPortStartFirstTask();
-    return pdFALSE;
-}
+    vPortSetupTimerInterrupt();                 // 设置好systick 系统滴答计时中断
+    uxCriticalNesting = 0;                      // 临界区嵌套初始化为0，没有嵌套
+    prvPortStartFirstTask();                    // 启动调度器第一个任务，之后触发SVC中断
+    return pdFALSE;                             // 若运行到这里代表出错了
+}   
 
 /** 进入临界区
  * @brief 进入临界区
@@ -353,6 +346,7 @@ void vPortExitCritical(void)
         portENABLE_INTERRUPTS();
     }
 }
+
 
 /** PendSV 中断处理函数*/
 void xPortPendSVHandler()
